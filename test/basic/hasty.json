@@ -1,0 +1,14 @@
+{
+  "pipeline": {
+    "build": {
+      "command": "build"
+    },
+    "lint": {
+      "command": "lint"
+    },
+    "test": {
+      "command": "test",
+      "dependencies": ["build", "lint"]
+    }
+  }
+}

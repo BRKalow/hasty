@@ -55,7 +55,9 @@ impl Script {
         }
     }
 
-    pub fn execute(&self) -> std::process::Child {
+    pub fn execute(&mut self) {
+        self.status = ScriptStatus::Running;
+
         let mut command = process::Command::new("npm");
 
         command
@@ -67,6 +69,10 @@ impl Script {
                 "failed to spawn command {}",
                 &self.config.command.clone()
             ))
+            .wait_with_output()
+            .unwrap();
+
+        self.status = ScriptStatus::Finished;
     }
 
     pub fn has_dependencies(&self) -> bool {

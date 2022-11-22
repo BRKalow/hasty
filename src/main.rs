@@ -19,7 +19,7 @@ fn main() {
             panic!("Pipeline does not contain the provided script")
         }
 
-        let script = Script::new(config.pipeline.get(&opts_script).unwrap().clone(), dir);
+        let mut script = Script::new(config.pipeline.get(&opts_script).unwrap().clone(), dir);
 
         if script.has_dependencies() {
             let empty_script = Script::new(
@@ -53,12 +53,12 @@ fn main() {
                 .iter()
                 .rev()
                 .for_each(|n| {
-                    let s = &dag[*n];
+                    let s = &mut dag[*n];
                     println!("execute {:?}", s);
-                    s.execute().wait_with_output().unwrap();
+                    s.execute();
                 });
         } else {
-            script.execute().wait_with_output().unwrap();
+            script.execute();
         }
     }
 }

@@ -1,10 +1,15 @@
 {
   "pipeline": {
     "build": {
-      "command": "build"
+      "command": "build",
+      "dependencies": ["format"]
     },
     "lint": {
-      "command": "lint"
+      "command": "lint",
+      "dependencies": ["format"]
+    },
+    "format": {
+      "command": "format"
     },
     "test": {
       "command": "test",

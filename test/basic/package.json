@@ -2,6 +2,7 @@
   "scripts": {
     "build": "echo \"build\"",
     "lint": "echo \"lint\"",
-    "test": "echo \"test\""
+    "test": "echo \"test\"",
+    "format": "echo \"format\""
   }
 }

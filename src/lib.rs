@@ -88,6 +88,12 @@ impl Script {
     }
 }
 
+impl PartialEq for Script {
+    fn eq(&self, other: &Self) -> bool {
+        self.config.command == other.config.command
+    }
+}
+
 pub fn load_config_file(opts: &options::HastyOptions) -> Config {
     let mut dir = env::current_dir().unwrap();
 
@@ -101,16 +107,4 @@ pub fn load_config_file(opts: &options::HastyOptions) -> Config {
     println!("config: {:?}", config);
 
     return config;
-}
-
-pub fn execute_command(cmd: &CommandConfig, dir: &PathBuf) -> std::process::Child {
-    println!("executing command: {}", cmd.command);
-    let command = process::Command::new("npm")
-        .current_dir(dir)
-        .arg("run")
-        .arg(cmd.command.clone())
-        .spawn()
-        .expect("failed to call command");
-
-    return command;
 }

@@ -1,6 +1,9 @@
 use clap::Parser;
-use daggy::{petgraph::algo, Dag};
-use hasty::{self, CommandConfig, Script};
+use daggy::{
+    petgraph::{algo, visit::IntoNodeIdentifiers},
+    Dag,
+};
+use hasty::{self, Script};
 
 fn main() {
     let options = hasty::options::HastyOptions::parse();
@@ -22,30 +25,59 @@ fn main() {
         let mut script = Script::new(config.pipeline.get(&opts_script).unwrap().clone(), dir);
 
         if script.has_dependencies() {
-            let empty_script = Script::new(
-                CommandConfig {
-                    command: "__empty_command".to_string(),
-                    dependencies: None,
-                    files: None,
-                    output: None,
-                },
-                dir,
-            );
+            // TODO: store IDs instead of Script structs, use to reference a map of scripts
+            // TODO: support workspaces
+            // TODO: build dependency graph between workspace packages
+            // TODO: support topological command dependencies
             let mut dag = Dag::<Script, u32, u32>::new();
             let root = dag.add_node(script.clone());
 
-            let mut cur = &script;
-            let parent = root;
+            let mut stack = vec![];
+            let mut cur = Some(script);
+            let mut parent = root;
 
-            // TODO: traverse all deps
-            while cur.has_dependencies() {
-                for dep in cur.dependencies().unwrap().into_iter() {
-                    let child = Script::new(config.pipeline.get(&dep).unwrap().clone(), dir);
+            while let Some(s) = cur {
+                if s.has_dependencies() {
+                    for dep in s.dependencies().unwrap().into_iter() {
+                        let child = Script::new(config.pipeline.get(&dep).unwrap().clone(), dir);
 
-                    dag.add_child(parent, 0, child);
+                        let mut child_index = dag.node_identifiers().find(|i| child == dag[*i]);
+
+                        // If the child already exists in the graph, add an edge from the current parent to the child
+                        if let Some(idx) = child_index {
+                            dag.add_edge(parent, idx, 0);
+                        } else {
+                            let (_, new_node) = dag.add_child(parent, 0, child.clone());
+                            child_index = Some(new_node)
+                        }
+
+                        if child.has_dependencies() {
+                            stack.append(
+                                &mut child
+                                    .dependencies()
+                                    .unwrap()
+                                    .into_iter()
+                                    .map(|x| {
+                                        Script::new(config.pipeline.get(&x).unwrap().clone(), dir)
+                                    })
+                                    .collect(),
+                            );
+                            // child_index should always be set at this point
+                            parent = child_index.unwrap();
+                        }
+                    }
+                } else {
+                    let s_index = dag.node_identifiers().find(|i| s == dag[*i]);
+
+                    // If the script already exists in the graph, add an edge from the current parent to the script
+                    if let Some(idx) = s_index {
+                        dag.add_edge(parent, idx, 0);
+                    } else {
+                        dag.add_child(parent, 0, s);
+                    }
                 }
 
-                cur = &empty_script;
+                cur = stack.pop();
             }
 
             algo::toposort(&dag, None)
@@ -54,7 +86,6 @@ fn main() {
                 .rev()
                 .for_each(|n| {
                     let s = &mut dag[*n];
-                    println!("execute {:?}", s);
                     s.execute();
                 });
         } else {

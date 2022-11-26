@@ -30,6 +30,7 @@ pub enum ScriptStatus {
 #[derive(Debug, Clone)]
 pub struct Script {
     pub status: ScriptStatus,
+    pub command: String,
     config: CommandConfig,
     dir: PathBuf,
 }
@@ -37,11 +38,9 @@ pub struct Script {
 impl Script {
     pub fn new(config: CommandConfig, dir: &PathBuf) -> Self {
         let mut command = process::Command::new("npm");
+        let name = config.command.clone();
 
-        command
-            .current_dir(dir)
-            .arg("run")
-            .arg(config.command.clone());
+        command.current_dir(dir).arg("run").arg(name.to_string());
 
         let mut status = ScriptStatus::Ready;
         if let Some(ref _deps) = config.dependencies {
@@ -51,6 +50,7 @@ impl Script {
         Script {
             config,
             dir: dir.into(),
+            command: name.to_string(),
             status,
         }
     }
@@ -86,6 +86,10 @@ impl Script {
     pub fn dependencies(&self) -> Option<Vec<String>> {
         self.config.dependencies.clone()
     }
+
+    pub fn id(&self) -> String {
+        make_script_id("root", &self.command)
+    }
 }
 
 impl PartialEq for Script {
@@ -107,4 +111,8 @@ pub fn load_config_file(opts: &options::HastyOptions) -> Config {
     println!("config: {:?}", config);
 
     return config;
+}
+
+pub fn make_script_id(package_name: &str, script_name: &str) -> String {
+    format!("{}#{}", package_name, script_name)
 }

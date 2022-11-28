@@ -1,4 +1,5 @@
 pub mod options;
+pub mod package_json;
 
 use serde::Deserialize;
 use std::{collections::HashMap, env, fs, path::PathBuf, process};
@@ -31,12 +32,13 @@ pub enum ScriptStatus {
 pub struct Script {
     pub status: ScriptStatus,
     pub command: String,
+    pub package_name: String,
     config: CommandConfig,
-    dir: PathBuf,
+    pub dir: PathBuf,
 }
 
 impl Script {
-    pub fn new(config: CommandConfig, dir: &PathBuf) -> Self {
+    pub fn new(config: CommandConfig, dir: &PathBuf, package_name: &str) -> Self {
         let mut command = process::Command::new("npm");
         let name = config.command.clone();
 
@@ -49,6 +51,7 @@ impl Script {
 
         Script {
             config,
+            package_name: package_name.to_string(),
             dir: dir.into(),
             command: name.to_string(),
             status,
@@ -88,7 +91,7 @@ impl Script {
     }
 
     pub fn id(&self) -> String {
-        make_script_id("root", &self.command)
+        make_script_id(&self.package_name, &self.command)
     }
 }
 
@@ -107,8 +110,6 @@ pub fn load_config_file(opts: &options::HastyOptions) -> Config {
 
     let raw = fs::read_to_string(dir.join(CONFIG_FILE_NAME)).unwrap();
     let config: Config = serde_json::from_str(&raw).unwrap();
-
-    println!("config: {:?}", config);
 
     return config;
 }

@@ -1,0 +1,6 @@
+{
+  "name": "b",
+  "scripts": {
+    "format": "echo \"format:b\""
+  }
+}

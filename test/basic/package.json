@@ -1,4 +1,8 @@
 {
+  "name": "root",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "echo \"build\"",
     "lint": "echo \"lint\"",

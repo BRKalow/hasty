@@ -1,0 +1,6 @@
+{
+  "name": "a",
+  "scripts": {
+    "build": "echo \"build:a\""
+  }
+}

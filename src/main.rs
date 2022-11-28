@@ -12,6 +12,7 @@ fn main() {
     if let Some(ref dir) = options.dir {
         println!("dir: {}", dir.display());
 
+        let workspaces = hasty::package_json::find_workspaces(dir);
         let config = hasty::load_config_file(&options);
 
         let opts_script = match options.script {
@@ -25,17 +26,37 @@ fn main() {
 
         let mut scripts: HashMap<String, Script> = HashMap::new();
 
-        let mut script = Script::new(config.pipeline.get(&opts_script).unwrap().clone(), dir);
+        let mut script = Script::new(
+            config.pipeline.get(&opts_script).unwrap().clone(),
+            dir,
+            "__ROOT__",
+        );
 
-        scripts.insert(make_script_id("root", &script.command), script.clone());
+        scripts.insert(script.id(), script.clone());
+
+        // check each workspace for the same script, add if found
+        for ws in workspaces {
+            if let Some(ws_scripts) = ws.scripts {
+                if ws_scripts.contains_key(&script.command) {
+                    let mut ws_script = script.clone();
+
+                    ws_script.package_name = ws.name.clone();
+
+                    if let Some(ws_dir) = ws.dir {
+                        ws_script.dir = ws_dir;
+                    }
+
+                    scripts.insert(make_script_id(&ws.name, &script.command), ws_script);
+                }
+            }
+        }
 
         if script.has_dependencies() {
-            // TODO: store IDs instead of Script structs, use to reference a map of scripts
             // TODO: support workspaces
             // TODO: build dependency graph between workspace packages
             // TODO: support topological command dependencies
             let mut dag = Dag::<String, u32, u32>::new();
-            let root = dag.add_node(make_script_id("root", &script.command));
+            let root = dag.add_node(script.id());
 
             let mut stack = vec![];
             let mut cur = Some(script);
@@ -45,11 +66,11 @@ fn main() {
                 if s.has_dependencies() {
                     for dep in s.dependencies().unwrap().into_iter() {
                         let script_config = config.pipeline.get(&dep).unwrap().clone();
-                        let script_id = make_script_id("root", &script_config.command);
+                        let script_id = make_script_id("__ROOT__", &script_config.command);
                         let mut child;
 
                         if scripts.contains_key(&script_id) == false {
-                            child = Script::new(script_config, dir);
+                            child = Script::new(script_config, dir, "__ROOT__");
                             scripts.insert(script_id.clone(), child.clone());
                         }
 
@@ -72,7 +93,11 @@ fn main() {
                                     .unwrap()
                                     .into_iter()
                                     .map(|x| {
-                                        Script::new(config.pipeline.get(&x).unwrap().clone(), dir)
+                                        Script::new(
+                                            config.pipeline.get(&x).unwrap().clone(),
+                                            dir,
+                                            "__ROOT__",
+                                        )
                                     })
                                     .collect(),
                             );
@@ -107,7 +132,9 @@ fn main() {
                 s.execute();
             }
         } else {
-            script.execute();
+            for s in scripts.values_mut().into_iter() {
+                s.execute();
+            }
         }
     }
 }

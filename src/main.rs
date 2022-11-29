@@ -25,8 +25,10 @@ fn main() {
         }
 
         let mut scripts: HashMap<String, Script> = HashMap::new();
+        let mut deps: Vec<(String, String)> = vec![];
+        let mut task_graph = Dag::<String, u32, u32>::new();
 
-        let mut script = Script::new(
+        let script = Script::new(
             config.pipeline.get(&opts_script).unwrap().clone(),
             dir,
             "__ROOT__",
@@ -34,107 +36,101 @@ fn main() {
 
         scripts.insert(script.id(), script.clone());
 
-        // check each workspace for the same script, add if found
-        for ws in workspaces {
-            if let Some(ws_scripts) = ws.scripts {
-                if ws_scripts.contains_key(&script.command) {
-                    let mut ws_script = script.clone();
+        // add all root dependencies now so we can iterate through the touched scripts later
+        if script.has_dependencies() {
+            let mut stack = vec![];
 
-                    ws_script.package_name = ws.name.clone();
+            stack.append(&mut script.dependencies().unwrap());
 
-                    if let Some(ws_dir) = ws.dir {
-                        ws_script.dir = ws_dir;
-                    }
+            while stack.len() > 0 {
+                let s = stack.pop().unwrap();
 
-                    scripts.insert(make_script_id(&ws.name, &script.command), ws_script);
+                if scripts.contains_key(&make_script_id("__ROOT__", &s)) {
+                    continue;
+                }
+
+                let s = Script::new(config.pipeline.get(&s).unwrap().clone(), dir, "__ROOT__");
+                scripts.insert(s.id(), s.clone());
+
+                if s.has_dependencies() {
+                    stack.append(&mut s.dependencies().unwrap());
                 }
             }
         }
 
-        if script.has_dependencies() {
-            // TODO: support workspaces
-            // TODO: build dependency graph between workspace packages
-            // TODO: support topological command dependencies
-            let mut dag = Dag::<String, u32, u32>::new();
-            let root = dag.add_node(script.id());
+        let cur_scripts = scripts
+            .values()
+            .map(|s| (s.id(), s.command.clone()))
+            .collect::<Vec<(String, String)>>();
 
-            let mut stack = vec![];
-            let mut cur = Some(script);
-            let mut parent = root;
+        // check each workspace for the same scripts, add if found
+        for ws in workspaces {
+            let ws_scripts = match ws.scripts {
+                Some(x) => x,
+                None => continue,
+            };
 
-            while let Some(s) = cur {
-                if s.has_dependencies() {
-                    for dep in s.dependencies().unwrap().into_iter() {
-                        let script_config = config.pipeline.get(&dep).unwrap().clone();
-                        let script_id = make_script_id("__ROOT__", &script_config.command);
-                        let mut child;
+            // ignore packages that don't include the main script we are running
+            if ws_scripts.contains_key(&script.command) == false {
+                continue;
+            }
 
-                        if scripts.contains_key(&script_id) == false {
-                            child = Script::new(script_config, dir, "__ROOT__");
-                            scripts.insert(script_id.clone(), child.clone());
-                        }
+            for (script_id, script_name) in &cur_scripts {
+                if ws_scripts.contains_key(script_name) {
+                    let s = scripts.get(script_id).unwrap();
 
-                        let mut child_index = dag.node_identifiers().find(|i| script_id == dag[*i]);
+                    let mut ws_script = s.clone();
 
-                        // If the child already exists in the graph, add an edge from the child to the parent
-                        if let Some(idx) = child_index {
-                            dag.add_edge(idx, parent, 0);
-                        } else {
-                            let (_, new_index) = dag.add_parent(parent, 0, script_id.clone());
-                            child_index = Some(new_index);
-                        }
+                    ws_script.package_name = ws.name.clone();
 
-                        child = scripts.get(&script_id).unwrap().clone();
-
-                        if child.has_dependencies() {
-                            stack.append(
-                                &mut child
-                                    .dependencies()
-                                    .unwrap()
-                                    .into_iter()
-                                    .map(|x| {
-                                        Script::new(
-                                            config.pipeline.get(&x).unwrap().clone(),
-                                            dir,
-                                            "__ROOT__",
-                                        )
-                                    })
-                                    .collect(),
-                            );
-                            // child_index should always be set at this point
-                            parent = child_index.unwrap();
-                        }
-                    }
-                } else {
-                    let s_index = dag.node_identifiers().find(|i| s.id() == dag[*i]);
-
-                    // If the script already exists in the graph, add an edge from the current script to the parent
-                    if let Some(idx) = s_index {
-                        dag.add_edge(idx, parent, 0);
-                    } else {
-                        dag.add_parent(parent, 0, s.id());
+                    if let Some(ws_dir) = ws.dir.clone() {
+                        ws_script.dir = ws_dir;
                     }
 
-                    if scripts.contains_key(&s.id()) == false {
-                        scripts.insert(s.id(), s);
+                    // ensure package-level deps are represented
+                    if let Some(script_deps) = &ws_script.dependencies() {
+                        for d in script_deps {
+                            if ws_scripts.contains_key(d) {
+                                deps.push((make_script_id(&ws.name, d), ws_script.id()))
+                            }
+                        }
                     }
+
+                    scripts.insert(ws_script.id(), ws_script);
                 }
+            }
+        }
 
-                cur = stack.pop();
+        // add all valid tasks to the graph
+        for s in scripts.keys() {
+            if s.starts_with("__ROOT__") {
+                continue;
             }
 
-            // Walk the graph in topological order, executing each script
-            let mut topo = Topo::new(&dag);
+            task_graph.add_node(s.clone());
+        }
 
-            while let Some(next_id) = topo.next(&dag) {
-                let script_id = &mut dag[next_id];
-                let s = scripts.get_mut(script_id).unwrap();
-                s.execute();
+        // populate graph dependencies
+        for (from_id, to_id) in deps {
+            let from_index = task_graph
+                .node_identifiers()
+                .find(|i| from_id == task_graph[*i]);
+            let to_index = task_graph
+                .node_identifiers()
+                .find(|i| to_id == task_graph[*i]);
+
+            if let (Some(from), Some(to)) = (from_index, to_index) {
+                task_graph.add_edge(from, to, 0);
             }
-        } else {
-            for s in scripts.values_mut().into_iter() {
-                s.execute();
-            }
+        }
+
+        // Walk the graph in topological order, executing each script
+        let mut topo = Topo::new(&task_graph);
+
+        while let Some(next_id) = topo.next(&task_graph) {
+            let script_id = &mut task_graph[next_id];
+            let s = scripts.get_mut(script_id).unwrap();
+            s.execute();
         }
     }
 }

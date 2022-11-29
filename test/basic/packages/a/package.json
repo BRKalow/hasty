@@ -1,6 +1,7 @@
 {
   "name": "a",
   "scripts": {
-    "build": "echo \"build:a\""
+    "build": "echo \"build:a\"",
+    "format": "echo \"format:a\""
   }
 }

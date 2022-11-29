@@ -34,7 +34,7 @@ pub fn find_workspaces(root_dir: &PathBuf) -> Vec<PackageJSON> {
 
     let pkg = read_package_json(root_dir);
 
-    if let Some(workspaces) = pkg.workspaces {
+    if let Some(workspaces) = &pkg.workspaces {
         for ws in workspaces {
             let glob_with_root = root_dir.join(&ws);
             for entry in glob(glob_with_root.to_str().unwrap()).unwrap() {
@@ -48,7 +48,7 @@ pub fn find_workspaces(root_dir: &PathBuf) -> Vec<PackageJSON> {
         }
     }
 
-    println!("{:?}", result);
+    result.push(pkg);
 
     result
 }

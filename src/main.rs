@@ -127,6 +127,7 @@ fn main() {
         // Walk the graph in topological order, executing each script
         let mut topo = Topo::new(&task_graph);
 
+        // TODO: how to parallelize?
         while let Some(next_id) = topo.next(&task_graph) {
             let script_id = &mut task_graph[next_id];
             let s = scripts.get_mut(script_id).unwrap();

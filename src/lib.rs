@@ -155,7 +155,9 @@ impl Engine {
                 .find(|i| String::from(to_id) == task_graph[*i]);
 
             if let (Some(from), Some(to)) = (from_index, to_index) {
-                task_graph.add_edge(from, to, 0);
+                if task_graph.add_edge(from, to, 0).is_err() {
+                    panic!("Cycle detected in the task graph: {} -> {}", from_id, to_id);
+                }
             }
         }
     }

@@ -7,7 +7,11 @@ use daggy::{
 };
 use package_json::{find_workspaces, PackageJSON};
 use serde::Deserialize;
-use std::{collections::HashMap, env, fs, path::PathBuf, process};
+use std::{collections::HashMap, env, fs, path::PathBuf, time::SystemTime};
+use tokio::{
+    process::{Child, Command},
+    task::JoinHandle,
+};
 
 static CONFIG_FILE_NAME: &str = "hasty.json";
 
@@ -44,10 +48,7 @@ pub struct Script {
 
 impl Script {
     pub fn new(config: CommandConfig, dir: &PathBuf, package_name: &str) -> Self {
-        let mut command = process::Command::new("npm");
         let name = config.command.clone();
-
-        command.current_dir(dir).arg("run").arg(name.to_string());
 
         let mut status = ScriptStatus::Ready;
         if let Some(ref _deps) = config.dependencies {
@@ -63,12 +64,12 @@ impl Script {
         }
     }
 
-    pub fn execute(&mut self) {
+    pub fn execute(&mut self) -> Child {
         self.status = ScriptStatus::Running;
 
-        let mut command = process::Command::new("npm");
+        let mut command = Command::new("npm");
 
-        command
+        let mut child = command
             .current_dir(&self.dir)
             .arg("run")
             .arg(self.config.command.clone())
@@ -76,11 +77,15 @@ impl Script {
             .expect(&format!(
                 "failed to spawn command {}",
                 &self.config.command.clone()
-            ))
-            .wait_with_output()
-            .unwrap();
+            ));
 
-        self.status = ScriptStatus::Finished;
+        child
+
+        // tokio::spawn(async move {
+        //     future.await;
+
+        //     self.status = ScriptStatus::Finished;
+        // });
     }
 
     pub fn has_dependencies(&self) -> bool {
@@ -171,15 +176,35 @@ impl Engine {
         &mut self.scripts
     }
 
-    pub fn execute(&mut self) {
+    pub async fn execute(&mut self) {
+        let now = SystemTime::now();
+
         // Walk the graph in topological order, executing each script
         let mut topo = Topo::new(&self.task_graph.graph());
 
-        // TODO: how to parallelize?
+        let mut tasks = HashMap::<String, JoinHandle<()>>::new();
+
+        // TODO: how to wait for dependencies?
         while let Some(next_id) = topo.next(&self.task_graph.graph()) {
             let script_id = &self.task_graph[next_id];
-            self.scripts.get_mut(script_id).unwrap().execute();
+            let script = self.scripts.get_mut(script_id).unwrap();
+
+            // add a task that we can await later to ensure things get cleaned up correctly
+            tasks.insert(
+                script_id.clone(),
+                tokio::spawn(async move {
+                    // TODO check for dependencies, wait on them if found. They should be guaranteed to be in the task map at this point.
+                    let mut child = script.execute();
+                    child.wait().await;
+                }),
+            );
         }
+
+        for task in tasks.values_mut() {
+            task.await;
+        }
+
+        println!("finished in: {}", now.elapsed().unwrap().as_secs());
     }
 
     pub fn resolve_workspace_scripts(&mut self) {

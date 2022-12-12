@@ -1,6 +1,5 @@
 {
   "name": "b",
   "scripts": {
-    "format": "echo \"format:b\""
-  }
+    "format": "echo \"format:b:start\"; sleep 5; echo \"format:b:end\""  }
 }

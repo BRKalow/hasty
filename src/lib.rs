@@ -7,13 +7,7 @@ use daggy::{
 };
 use package_json::{find_workspaces, PackageJSON};
 use serde::Deserialize;
-use std::{
-    cell::{Ref, RefCell, RefMut},
-    collections::HashMap,
-    env, fs,
-    path::PathBuf,
-    process,
-};
+use std::{collections::HashMap, env, fs, path::PathBuf, process};
 
 static CONFIG_FILE_NAME: &str = "hasty.json";
 
@@ -116,9 +110,9 @@ pub struct Engine {
     called_script: String,
     dir: PathBuf,
     config: Config,
-    task_graph: RefCell<Dag<String, u32, u32>>,
-    scripts: RefCell<HashMap<String, Script>>,
-    deps: RefCell<Vec<(String, String)>>,
+    task_graph: Dag<String, u32, u32>,
+    scripts: HashMap<String, Script>,
+    deps: Vec<(String, String)>,
     workspaces: Vec<PackageJSON>,
 }
 
@@ -130,78 +124,72 @@ impl Engine {
             called_script: String::from(called_script),
             dir,
             config,
-            task_graph: RefCell::new(Dag::<String, u32, u32>::new()),
-            scripts: RefCell::new(HashMap::<String, Script>::new()),
-            deps: RefCell::new(Vec::new()),
+            task_graph: Dag::<String, u32, u32>::new(),
+            scripts: HashMap::<String, Script>::new(),
+            deps: Vec::new(),
             workspaces,
         }
     }
 
     pub fn add_dep(&mut self, from: &str, to: &str) {
-        self.deps
-            .borrow_mut()
-            .push((String::from(from), String::from(to)));
+        self.deps.push((String::from(from), String::from(to)));
     }
 
-    pub fn add_deps_to_graph(&self) {
-        let mut task_graph = self.task_graph.borrow_mut();
-
-        for (from_id, to_id) in self.deps.borrow().iter() {
-            let from_index = task_graph
+    pub fn add_deps_to_graph(&mut self) {
+        for (from_id, to_id) in self.deps.iter() {
+            let from_index = self
+                .task_graph
                 .node_identifiers()
-                .find(|i| String::from(from_id) == task_graph[*i]);
-            let to_index = task_graph
+                .find(|i| String::from(from_id) == self.task_graph[*i]);
+            let to_index = self
+                .task_graph
                 .node_identifiers()
-                .find(|i| String::from(to_id) == task_graph[*i]);
+                .find(|i| String::from(to_id) == self.task_graph[*i]);
 
             if let (Some(from), Some(to)) = (from_index, to_index) {
-                if task_graph.add_edge(from, to, 0).is_err() {
+                if self.task_graph.add_edge(from, to, 0).is_err() {
                     panic!("Cycle detected in the task graph: {} -> {}", from_id, to_id);
                 }
             }
         }
     }
 
-    pub fn add_script(&self, script: &Script) {
-        self.scripts
-            .borrow_mut()
-            .insert(script.id(), script.clone());
+    pub fn add_script(&mut self, script: &Script) {
+        self.scripts.insert(script.id(), script.clone());
 
         // add a node to the task graph if it's not a "__ROOT__" script
         if script.id().starts_with("__ROOT__") == false {
-            self.task_graph.borrow_mut().add_node(script.id());
+            self.task_graph.add_node(script.id());
         }
     }
 
-    pub fn scripts(&self) -> Ref<HashMap<std::string::String, Script>> {
-        self.scripts.borrow()
+    pub fn scripts(&self) -> &HashMap<std::string::String, Script> {
+        &self.scripts
     }
 
-    pub fn scripts_mut(&self) -> RefMut<HashMap<std::string::String, Script>> {
-        self.scripts.borrow_mut()
+    pub fn scripts_mut(&mut self) -> &mut HashMap<std::string::String, Script> {
+        &mut self.scripts
     }
 
-    pub fn execute(&self) {
+    pub fn execute(&mut self) {
         // Walk the graph in topological order, executing each script
-        let mut topo = Topo::new(&self.task_graph.borrow_mut().graph());
+        let mut topo = Topo::new(&self.task_graph.graph());
 
         // TODO: how to parallelize?
-        while let Some(next_id) = topo.next(&self.task_graph.borrow().graph()) {
-            let script_id = &self.task_graph.borrow()[next_id];
-            self.scripts
-                .borrow_mut()
-                .get_mut(script_id)
-                .unwrap()
-                .execute();
+        while let Some(next_id) = topo.next(&self.task_graph.graph()) {
+            let script_id = &self.task_graph[next_id];
+            self.scripts.get_mut(script_id).unwrap().execute();
         }
     }
 
-    pub fn resolve_workspace_scripts(&self) {
+    pub fn resolve_workspace_scripts(&mut self) {
         let cur_scripts = self
             .scripts()
             .values()
             .map(|s| (s.id(), s.command.clone()))
             .collect::<Vec<(String, String)>>();
+
+        let mut scripts_to_add = vec![];
 
         for ws in self.workspaces.iter() {
             let ws_scripts = match &ws.scripts {
@@ -216,7 +204,7 @@ impl Engine {
 
             for (script_id, script_name) in &cur_scripts {
                 if ws_scripts.contains_key(script_name) {
-                    let mut ws_script = self.scripts.borrow().get(script_id).unwrap().clone();
+                    let mut ws_script = self.scripts.get(script_id).unwrap().clone();
 
                     ws_script.package_name = ws.name.clone();
 
@@ -229,15 +217,19 @@ impl Engine {
                         for d in script_deps {
                             if ws_scripts.contains_key(d) {
                                 self.deps
-                                    .borrow_mut()
                                     .push((make_script_id(&ws.name, d), ws_script.id()));
                             }
                         }
                     }
 
-                    Engine::add_script(self, &ws_script);
+                    // collect the script so we can add it to our engine after we're done iterating throught the workspaces
+                    scripts_to_add.push(ws_script);
                 }
             }
+        }
+
+        for script in scripts_to_add.iter() {
+            self.add_script(script);
         }
     }
 }

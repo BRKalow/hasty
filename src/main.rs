@@ -18,7 +18,7 @@ fn main() {
             panic!("Pipeline does not contain the provided script")
         }
 
-        let engine = Engine::new(config.clone(), dir.to_path_buf(), &opts_script);
+        let mut engine = Engine::new(config.clone(), dir.to_path_buf(), &opts_script);
 
         let script = Script::new(
             config.pipeline.get(&opts_script).unwrap().clone(),

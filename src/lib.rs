@@ -5,11 +5,13 @@ use daggy::{
     petgraph::visit::{IntoNodeIdentifiers, Topo},
     Dag,
 };
+use futures::future::join_all;
 use package_json::{find_workspaces, PackageJSON};
 use serde::Deserialize;
 use std::{collections::HashMap, env, fs, path::PathBuf, time::SystemTime};
 use tokio::{
     process::{Child, Command},
+    sync::watch::{self, Sender},
     task::JoinHandle,
 };
 
@@ -182,22 +184,38 @@ impl Engine {
         // Walk the graph in topological order, executing each script
         let mut topo = Topo::new(&self.task_graph.graph());
 
-        let mut tasks = HashMap::<String, JoinHandle<()>>::new();
+        let mut task_statuses = HashMap::<String, Sender<ScriptStatus>>::new();
 
         // TODO: how to wait for dependencies?
         while let Some(next_id) = topo.next(&self.task_graph.graph()) {
             let script_id = &self.task_graph[next_id];
             let script = self.scripts.get_mut(script_id).unwrap();
 
+            let (script_watcher, _) = watch::channel(ScriptStatus::Waiting);
+
+            task_statuses.insert(script_id.clone(), script_watcher);
+
+            let deps_channels = vec![];
+
+            // subscribe to a task's dependencies status channels
+            if let Some(deps) = script.dependencies() {
+                for d in deps {
+                    deps_channels.push(task_statuses.get(&d).unwrap().subscribe());
+                }
+            }
+
             // add a task that we can await later to ensure things get cleaned up correctly
-            tasks.insert(
-                script_id.clone(),
-                tokio::spawn(async move {
-                    // TODO check for dependencies, wait on them if found. They should be guaranteed to be in the task map at this point.
-                    let mut child = script.execute();
-                    child.wait().await;
-                }),
-            );
+            // tasks.insert(
+            //     script_id.clone(),
+            tokio::spawn(async move {
+                // for each status channel, await
+                // TODO check for dependencies, wait on them if found. They should be guaranteed to be in the task map at this point.
+                let mut child = script.execute();
+                child.wait().await;
+
+                script_watcher.send_replace(ScriptStatus::Finished);
+            });
+            // );
         }
 
         for task in tasks.values_mut() {

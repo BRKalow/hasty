@@ -11,8 +11,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, env, fs, path::PathBuf, time::SystemTime};
 use tokio::{
     process::{Child, Command},
-    sync::watch::{self, Sender},
-    task::JoinHandle,
+    sync::watch::{self, Receiver},
 };
 
 static CONFIG_FILE_NAME: &str = "hasty.json";
@@ -82,12 +81,6 @@ impl Script {
             ));
 
         child
-
-        // tokio::spawn(async move {
-        //     future.await;
-
-        //     self.status = ScriptStatus::Finished;
-        // });
     }
 
     pub fn has_dependencies(&self) -> bool {
@@ -184,43 +177,63 @@ impl Engine {
         // Walk the graph in topological order, executing each script
         let mut topo = Topo::new(&self.task_graph.graph());
 
-        let mut task_statuses = HashMap::<String, Sender<ScriptStatus>>::new();
+        let mut task_statuses = HashMap::<String, Receiver<ScriptStatus>>::new();
+        let mut tasks = vec![];
 
         // TODO: how to wait for dependencies?
         while let Some(next_id) = topo.next(&self.task_graph.graph()) {
             let script_id = &self.task_graph[next_id];
-            let script = self.scripts.get_mut(script_id).unwrap();
+            let mut script = self.scripts.get_mut(script_id).unwrap().clone();
 
-            let (script_watcher, _) = watch::channel(ScriptStatus::Waiting);
+            let (script_watcher, script_recv) = watch::channel(ScriptStatus::Waiting);
 
-            task_statuses.insert(script_id.clone(), script_watcher);
+            task_statuses.insert(script_id.clone(), script_recv);
 
-            let deps_channels = vec![];
+            let mut deps_channels = vec![];
 
             // subscribe to a task's dependencies status channels
             if let Some(deps) = script.dependencies() {
                 for d in deps {
-                    deps_channels.push(task_statuses.get(&d).unwrap().subscribe());
+                    deps_channels.push(
+                        task_statuses
+                            .get(&make_script_id(&script.package_name, &d))
+                            .unwrap()
+                            .clone(),
+                    );
                 }
             }
 
             // add a task that we can await later to ensure things get cleaned up correctly
-            // tasks.insert(
-            //     script_id.clone(),
-            tokio::spawn(async move {
-                // for each status channel, await
-                // TODO check for dependencies, wait on them if found. They should be guaranteed to be in the task map at this point.
+            tasks.push(tokio::spawn(async move {
+                let mut deps_remaining = deps_channels.len();
+
+                // TODO: there's probably a better way to accomplish waiting for deps
+                while deps_remaining > 0 {
+                    for ch in deps_channels.iter_mut() {
+                        // If the channel has a value of SciprtStatus::Finished
+                        if *ch.borrow() == ScriptStatus::Finished {
+                            deps_remaining -= 1;
+                        }
+                        ch.changed().await;
+                    }
+                }
+
                 let mut child = script.execute();
-                child.wait().await;
+
+                let status = match child.wait().await {
+                    Ok(status) => Some(status),
+                    Err(err) => {
+                        println!("Error running script: {:?}", err);
+                        None
+                    }
+                };
 
                 script_watcher.send_replace(ScriptStatus::Finished);
-            });
+            }));
             // );
         }
 
-        for task in tasks.values_mut() {
-            task.await;
-        }
+        join_all(tasks).await;
 
         println!("finished in: {}", now.elapsed().unwrap().as_secs());
     }

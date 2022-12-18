@@ -46,10 +46,16 @@ pub struct Script {
     pub package_name: String,
     config: CommandConfig,
     pub dir: PathBuf,
+    package_manager: String,
 }
 
 impl Script {
-    pub fn new(config: CommandConfig, dir: &PathBuf, package_name: &str) -> Self {
+    pub fn new(
+        config: CommandConfig,
+        dir: &PathBuf,
+        package_name: &str,
+        package_manager: String,
+    ) -> Self {
         let name = config.command.clone();
 
         let mut status = ScriptStatus::Ready;
@@ -63,13 +69,14 @@ impl Script {
             dir: dir.into(),
             command: name.to_string(),
             status,
+            package_manager,
         }
     }
 
     pub fn execute(&mut self) -> Child {
         self.status = ScriptStatus::Running;
 
-        let mut command = Command::new("npm");
+        let mut command = Command::new(self.package_manager.clone());
 
         let mut child = command
             .current_dir(&self.dir)

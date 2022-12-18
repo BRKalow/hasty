@@ -4,6 +4,7 @@ use hasty::{self, make_script_id, Engine, Script, TOPOLOGICAL_DEP_PREFIX};
 #[tokio::main]
 async fn main() {
     let options = hasty::options::HastyOptions::parse();
+    println!("Using package manager: {}", options.package_manager.clone());
 
     if let Some(ref dir) = options.dir {
         println!("dir: {}", dir.display());
@@ -25,6 +26,7 @@ async fn main() {
             config.pipeline.get(&opts_script).unwrap().clone(),
             dir,
             "__ROOT__",
+            options.package_manager.clone(),
         );
 
         engine.add_script(&script);
@@ -49,7 +51,12 @@ async fn main() {
                     continue;
                 }
 
-                let s = Script::new(config.pipeline.get(&s).unwrap().clone(), dir, "__ROOT__");
+                let s = Script::new(
+                    config.pipeline.get(&s).unwrap().clone(),
+                    dir,
+                    "__ROOT__",
+                    options.package_manager.clone(),
+                );
                 engine.add_script(&s);
 
                 if s.has_dependencies() {

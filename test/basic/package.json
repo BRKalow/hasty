@@ -7,5 +7,5 @@
     "build": "echo \"build\"",
     "lint": "echo \"lint\"",
     "test": "echo \"test\"",
-    "format": "echo \"format:start\"; sleep 7; echo \"format:end\""  }
+    "format": "echo \"format:start\"; sleep 1; echo \"format:end\""  }
 }

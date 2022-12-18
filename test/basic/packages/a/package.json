@@ -1,7 +1,10 @@
 {
   "name": "a",
   "scripts": {
-    "build": "echo \"build:a:start\"; sleep 3; echo \"build:a:end\"",
-    "format": "echo \"format:a:start\"; sleep 10; echo \"format:a:end\"; exit 1"
+    "build": "echo \"build:a:start\"; sleep 1; echo \"build:a:end\"",
+    "format": "echo \"format:a:start\"; sleep 1; echo \"format:a:end\"; exit 1"
+  },
+  "dependencies": {
+    "b": "*"
   }
 }

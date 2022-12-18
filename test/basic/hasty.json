@@ -2,7 +2,7 @@
   "pipeline": {
     "build": {
       "command": "build",
-      "dependencies": ["format"]
+      "dependencies": ["format", "^build"]
     },
     "lint": {
       "command": "lint",

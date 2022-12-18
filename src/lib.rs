@@ -3,7 +3,7 @@ pub mod package_json;
 
 use daggy::{
     petgraph::visit::{IntoNodeIdentifiers, Topo},
-    Dag,
+    Dag, NodeIndex, Walker,
 };
 use futures::future::join_all;
 use package_json::{find_workspaces, PackageJSON};
@@ -15,6 +15,7 @@ use tokio::{
 };
 
 static CONFIG_FILE_NAME: &str = "hasty.json";
+pub static TOPOLOGICAL_DEP_PREFIX: &str = "^";
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct CommandConfig {
@@ -111,6 +112,7 @@ pub struct Engine {
     dir: PathBuf,
     config: Config,
     task_graph: Dag<String, u32, u32>,
+    package_graph: Dag<String, u32, u32>,
     scripts: HashMap<String, Script>,
     deps: Vec<(String, String)>,
     workspaces: Vec<PackageJSON>,
@@ -119,11 +121,15 @@ pub struct Engine {
 impl Engine {
     pub fn new(config: Config, dir: PathBuf, called_script: &str) -> Self {
         let workspaces = find_workspaces(&dir);
+        let mut package_graph = Dag::<String, u32, u32>::new();
+
+        package_graph.add_node(String::from("__ROOT__"));
 
         Engine {
             called_script: String::from(called_script),
             dir,
             config,
+            package_graph,
             task_graph: Dag::<String, u32, u32>::new(),
             scripts: HashMap::<String, Script>::new(),
             deps: Vec::new(),
@@ -137,14 +143,8 @@ impl Engine {
 
     pub fn add_deps_to_graph(&mut self) {
         for (from_id, to_id) in self.deps.iter() {
-            let from_index = self
-                .task_graph
-                .node_identifiers()
-                .find(|i| String::from(from_id) == self.task_graph[*i]);
-            let to_index = self
-                .task_graph
-                .node_identifiers()
-                .find(|i| String::from(to_id) == self.task_graph[*i]);
+            let from_index = find_node_index(&self.task_graph, String::from(from_id));
+            let to_index = find_node_index(&self.task_graph, String::from(to_id));
 
             if let (Some(from), Some(to)) = (from_index, to_index) {
                 if self.task_graph.add_edge(from, to, 0).is_err() {
@@ -192,14 +192,11 @@ impl Engine {
             let mut deps_channels = vec![];
 
             // subscribe to a task's dependencies status channels
-            if let Some(deps) = script.dependencies() {
-                for d in deps {
-                    deps_channels.push(
-                        task_statuses
-                            .get(&make_script_id(&script.package_name, &d))
-                            .unwrap()
-                            .clone(),
-                    );
+            if script.has_dependencies() {
+                for (from, to) in &self.deps {
+                    if String::from(to) == script.id() {
+                        deps_channels.push(task_statuses.get(from).unwrap().clone());
+                    }
                 }
             }
 
@@ -236,6 +233,8 @@ impl Engine {
         join_all(tasks).await;
 
         println!("finished in: {}", now.elapsed().unwrap().as_secs());
+
+        println!("{:?}", daggy::petgraph::dot::Dot::new(&self.task_graph));
     }
 
     pub fn resolve_workspace_scripts(&mut self) {
@@ -288,6 +287,97 @@ impl Engine {
             self.add_script(script);
         }
     }
+
+    pub fn build_package_graph(&mut self) {
+        for ws in &self.workspaces {
+            let pkg_node_id = self.package_graph.add_node(String::from(&ws.name));
+
+            if let Some(ws_deps) = &ws.dependencies {
+                for dep in ws_deps.keys() {
+                    let dep_node_id = find_node_index(&self.package_graph, String::from(dep));
+
+                    if None == dep_node_id {
+                        self.package_graph
+                            .add_parent(pkg_node_id, 1, String::from(dep));
+                    } else if let Some(dep_node_id) = dep_node_id {
+                        self.package_graph.add_edge(dep_node_id, pkg_node_id, 1);
+                    }
+                }
+            }
+
+            if let Some(ws_dev_deps) = &ws.dev_dependencies {
+                for dep in ws_dev_deps.keys() {
+                    let dep_node_id = find_node_index(&self.package_graph, String::from(dep));
+
+                    if None == dep_node_id {
+                        self.package_graph
+                            .add_parent(pkg_node_id, 1, String::from(dep));
+                    } else if let Some(dep_node_id) = dep_node_id {
+                        self.package_graph.add_edge(dep_node_id, pkg_node_id, 1);
+                    }
+                }
+            }
+        }
+
+        println!("{:?}", self.package_graph);
+    }
+
+    pub fn add_topo_task_deps(&mut self) {
+        let cur_scripts = self
+            .scripts()
+            .values()
+            .map(|s| s.clone())
+            .collect::<Vec<Script>>();
+
+        for s in &cur_scripts {
+            let package_name = &s.package_name;
+
+            if s.has_dependencies() == false {
+                continue;
+            }
+
+            // check the script's dependnecies for any topological dependencies. Uses the package_graph to determine topological task dependencies.
+            for d in s.dependencies().unwrap() {
+                if d.starts_with(TOPOLOGICAL_DEP_PREFIX) == false {
+                    continue;
+                }
+                let dep_no_topo_prefix = d.replace(TOPOLOGICAL_DEP_PREFIX, "");
+
+                let package_node_index =
+                    find_node_index(&self.package_graph, String::from(package_name)).unwrap();
+                let mut package_parents = self.package_graph.parents(package_node_index);
+
+                for (_, parent_package_index) in package_parents.walk_next(&self.package_graph) {
+                    let parent_package_name = self
+                        .package_graph
+                        .node_weight(parent_package_index)
+                        .unwrap();
+                    let parent_package = self
+                        .workspaces
+                        .iter()
+                        .find(|ws| ws.name == String::from(parent_package_name))
+                        .unwrap();
+
+                    if let Some(parent_scripts) = &parent_package.scripts {
+                        if parent_scripts.get(&dep_no_topo_prefix) != None {
+                            // The parent script contais the topological dependency, so add a dep to the task graph
+                            self.deps.push((
+                                make_script_id(parent_package_name, &dep_no_topo_prefix),
+                                s.id(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn find_node_index<NodeType: std::cmp::PartialEq>(
+    graph: &Dag<NodeType, u32, u32>,
+    node: NodeType,
+) -> Option<NodeIndex> {
+    return graph.node_identifiers().find(|i| node == graph[*i]);
 }
 
 pub fn load_config_file(opts: &options::HastyOptions) -> Config {

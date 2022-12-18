@@ -1,5 +1,5 @@
 use clap::Parser;
-use hasty::{self, make_script_id, Engine, Script};
+use hasty::{self, make_script_id, Engine, Script, TOPOLOGICAL_DEP_PREFIX};
 
 #[tokio::main]
 async fn main() {
@@ -36,7 +36,11 @@ async fn main() {
             stack.append(&mut script.dependencies().unwrap());
 
             while stack.len() > 0 {
-                let s = stack.pop().unwrap();
+                let mut s = stack.pop().unwrap();
+
+                if s.starts_with(TOPOLOGICAL_DEP_PREFIX) {
+                    s = s.replace(TOPOLOGICAL_DEP_PREFIX, "");
+                }
 
                 if engine
                     .scripts()
@@ -54,7 +58,11 @@ async fn main() {
             }
         }
 
+        engine.build_package_graph();
+
         engine.resolve_workspace_scripts();
+
+        engine.add_topo_task_deps();
 
         // populate graph dependencies
         engine.add_deps_to_graph();

@@ -1,7 +1,7 @@
 {
   "name": "a",
   "scripts": {
-    "build": "echo \"build:a\"",
-    "format": "echo \"format:a\""
+    "build": "echo \"build:a:start\"; sleep 3; echo \"build:a:end\"",
+    "format": "echo \"format:a:start\"; sleep 10; echo \"format:a:end\"; exit 1"
   }
 }

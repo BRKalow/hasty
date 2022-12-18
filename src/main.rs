@@ -1,7 +1,8 @@
 use clap::Parser;
 use hasty::{self, make_script_id, Engine, Script};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let options = hasty::options::HastyOptions::parse();
 
     if let Some(ref dir) = options.dir {
@@ -58,6 +59,6 @@ fn main() {
         // populate graph dependencies
         engine.add_deps_to_graph();
 
-        engine.execute();
+        engine.execute().await;
     }
 }

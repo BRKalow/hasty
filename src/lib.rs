@@ -5,9 +5,14 @@ use daggy::{
     petgraph::visit::{IntoNodeIdentifiers, Topo},
     Dag,
 };
+use futures::future::join_all;
 use package_json::{find_workspaces, PackageJSON};
 use serde::Deserialize;
-use std::{collections::HashMap, env, fs, path::PathBuf, process};
+use std::{collections::HashMap, env, fs, path::PathBuf, time::SystemTime};
+use tokio::{
+    process::{Child, Command},
+    sync::watch::{self, Receiver},
+};
 
 static CONFIG_FILE_NAME: &str = "hasty.json";
 
@@ -44,10 +49,7 @@ pub struct Script {
 
 impl Script {
     pub fn new(config: CommandConfig, dir: &PathBuf, package_name: &str) -> Self {
-        let mut command = process::Command::new("npm");
         let name = config.command.clone();
-
-        command.current_dir(dir).arg("run").arg(name.to_string());
 
         let mut status = ScriptStatus::Ready;
         if let Some(ref _deps) = config.dependencies {
@@ -63,12 +65,12 @@ impl Script {
         }
     }
 
-    pub fn execute(&mut self) {
+    pub fn execute(&mut self) -> Child {
         self.status = ScriptStatus::Running;
 
-        let mut command = process::Command::new("npm");
+        let mut command = Command::new("npm");
 
-        command
+        let mut child = command
             .current_dir(&self.dir)
             .arg("run")
             .arg(self.config.command.clone())
@@ -76,11 +78,9 @@ impl Script {
             .expect(&format!(
                 "failed to spawn command {}",
                 &self.config.command.clone()
-            ))
-            .wait_with_output()
-            .unwrap();
+            ));
 
-        self.status = ScriptStatus::Finished;
+        child
     }
 
     pub fn has_dependencies(&self) -> bool {
@@ -171,15 +171,71 @@ impl Engine {
         &mut self.scripts
     }
 
-    pub fn execute(&mut self) {
+    pub async fn execute(&mut self) {
+        let now = SystemTime::now();
+
         // Walk the graph in topological order, executing each script
         let mut topo = Topo::new(&self.task_graph.graph());
 
-        // TODO: how to parallelize?
+        let mut task_statuses = HashMap::<String, Receiver<ScriptStatus>>::new();
+        let mut tasks = vec![];
+
+        // TODO: how to wait for dependencies?
         while let Some(next_id) = topo.next(&self.task_graph.graph()) {
             let script_id = &self.task_graph[next_id];
-            self.scripts.get_mut(script_id).unwrap().execute();
+            let mut script = self.scripts.get_mut(script_id).unwrap().clone();
+
+            let (script_watcher, script_recv) = watch::channel(ScriptStatus::Waiting);
+
+            task_statuses.insert(script_id.clone(), script_recv);
+
+            let mut deps_channels = vec![];
+
+            // subscribe to a task's dependencies status channels
+            if let Some(deps) = script.dependencies() {
+                for d in deps {
+                    deps_channels.push(
+                        task_statuses
+                            .get(&make_script_id(&script.package_name, &d))
+                            .unwrap()
+                            .clone(),
+                    );
+                }
+            }
+
+            // add a task that we can await later to ensure things get cleaned up correctly
+            tasks.push(tokio::spawn(async move {
+                let mut deps_remaining = deps_channels.len();
+
+                // TODO: there's probably a better way to accomplish waiting for deps
+                while deps_remaining > 0 {
+                    for ch in deps_channels.iter_mut() {
+                        // If the channel has a value of SciprtStatus::Finished
+                        if *ch.borrow() == ScriptStatus::Finished {
+                            deps_remaining -= 1;
+                        }
+                        ch.changed().await;
+                    }
+                }
+
+                let mut child = script.execute();
+
+                let status = match child.wait().await {
+                    Ok(status) => Some(status),
+                    Err(err) => {
+                        println!("Error running script: {:?}", err);
+                        None
+                    }
+                };
+
+                script_watcher.send_replace(ScriptStatus::Finished);
+            }));
+            // );
         }
+
+        join_all(tasks).await;
+
+        println!("finished in: {}", now.elapsed().unwrap().as_secs());
     }
 
     pub fn resolve_workspace_scripts(&mut self) {

@@ -71,7 +71,7 @@ impl Script {
 
         let mut command = Command::new("npm");
 
-        let mut child = command
+        let child = command
             .current_dir(&self.dir)
             .arg("run")
             .arg(self.config.command.clone())
@@ -93,7 +93,37 @@ impl Script {
     }
 
     pub fn dependencies(&self) -> Option<Vec<String>> {
-        self.config.dependencies.clone()
+        match self.config.dependencies.clone() {
+            Some(deps) => Some(
+                deps.iter()
+                    .filter(|d| !d.starts_with(&TOPOLOGICAL_DEP_PREFIX))
+                    .map(|d| {
+                        if d.starts_with(&TOPOLOGICAL_DEP_PREFIX) == false {
+                            return String::from(d);
+                        }
+                        return d.replace(TOPOLOGICAL_DEP_PREFIX, "");
+                    })
+                    .collect(),
+            ),
+            None => None,
+        }
+    }
+
+    pub fn topological_dependencies(&self) -> Option<Vec<String>> {
+        match self.config.dependencies.clone() {
+            Some(deps) => Some(
+                deps.iter()
+                    .filter(|d| d.starts_with(&TOPOLOGICAL_DEP_PREFIX))
+                    .map(|d| {
+                        if d.starts_with(&TOPOLOGICAL_DEP_PREFIX) == false {
+                            return String::from(d);
+                        }
+                        return d.replace(TOPOLOGICAL_DEP_PREFIX, "");
+                    })
+                    .collect(),
+            ),
+            None => None,
+        }
     }
 
     pub fn id(&self) -> String {
@@ -318,8 +348,6 @@ impl Engine {
                 }
             }
         }
-
-        println!("{:?}", self.package_graph);
     }
 
     pub fn add_topo_task_deps(&mut self) {
@@ -337,12 +365,8 @@ impl Engine {
             }
 
             // check the script's dependnecies for any topological dependencies. Uses the package_graph to determine topological task dependencies.
-            for d in s.dependencies().unwrap() {
-                if d.starts_with(TOPOLOGICAL_DEP_PREFIX) == false {
-                    continue;
-                }
-                let dep_no_topo_prefix = d.replace(TOPOLOGICAL_DEP_PREFIX, "");
-
+            for d in s.topological_dependencies().unwrap() {
+                println!("{:?}", d);
                 let package_node_index =
                     find_node_index(&self.package_graph, String::from(package_name)).unwrap();
                 let mut package_parents = self.package_graph.parents(package_node_index);
@@ -359,12 +383,10 @@ impl Engine {
                         .unwrap();
 
                     if let Some(parent_scripts) = &parent_package.scripts {
-                        if parent_scripts.get(&dep_no_topo_prefix) != None {
+                        if parent_scripts.get(&d) != None {
                             // The parent script contais the topological dependency, so add a dep to the task graph
-                            self.deps.push((
-                                make_script_id(parent_package_name, &dep_no_topo_prefix),
-                                s.id(),
-                            ));
+                            self.deps
+                                .push((make_script_id(parent_package_name, &d), s.id()));
                         }
                     }
                 }

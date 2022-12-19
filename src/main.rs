@@ -36,11 +36,7 @@ async fn main() {
             stack.append(&mut script.dependencies().unwrap());
 
             while stack.len() > 0 {
-                let mut s = stack.pop().unwrap();
-
-                if s.starts_with(TOPOLOGICAL_DEP_PREFIX) {
-                    s = s.replace(TOPOLOGICAL_DEP_PREFIX, "");
-                }
+                let s = stack.pop().unwrap();
 
                 if engine
                     .scripts()

@@ -1,3 +1,4 @@
+pub mod logger;
 pub mod options;
 pub mod package_json;
 
@@ -6,13 +7,17 @@ use daggy::{
     Dag, NodeIndex, Walker,
 };
 use futures::future::join_all;
+use log::info;
 use package_json::{find_workspaces, PackageJSON};
 use serde::Deserialize;
+use std::process::Stdio;
 use std::{collections::HashMap, env, fs, path::PathBuf, time::SystemTime};
 use tokio::{
+    io::{AsyncBufReadExt, AsyncRead, BufReader},
     process::{Child, Command},
     sync::watch::{self, Receiver},
 };
+use urlencoding::encode;
 
 static CONFIG_FILE_NAME: &str = "hasty.json";
 pub static TOPOLOGICAL_DEP_PREFIX: &str = "^";
@@ -71,15 +76,26 @@ impl Script {
 
         let mut command = Command::new("npm");
 
-        let child = command
+        let mut child = command
             .current_dir(&self.dir)
             .arg("run")
             .arg(self.config.command.clone())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect(&format!(
                 "failed to spawn command {}",
                 &self.config.command.clone()
             ));
+
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        let script_id = self.id();
+        let script_id_err = self.id();
+
+        pipe_child_stdio(stdout, script_id);
+        pipe_child_stdio(stderr, script_id_err);
 
         child
     }
@@ -201,7 +217,7 @@ impl Engine {
         &mut self.scripts
     }
 
-    pub async fn execute(&mut self) {
+    pub async fn execute(&mut self, dry_run: bool) {
         let now = SystemTime::now();
 
         // Walk the graph in topological order, executing each script
@@ -210,7 +226,6 @@ impl Engine {
         let mut task_statuses = HashMap::<String, Receiver<ScriptStatus>>::new();
         let mut tasks = vec![];
 
-        // TODO: how to wait for dependencies?
         while let Some(next_id) = topo.next(&self.task_graph.graph()) {
             let script_id = &self.task_graph[next_id];
             let mut script = self.scripts.get_mut(script_id).unwrap().clone();
@@ -238,33 +253,41 @@ impl Engine {
                 while deps_remaining > 0 {
                     for ch in deps_channels.iter_mut() {
                         // If the channel has a value of SciprtStatus::Finished
-                        if *ch.borrow() == ScriptStatus::Finished {
+                        if *ch.borrow() == ScriptStatus::Finished && deps_remaining > 0 {
                             deps_remaining -= 1;
                         }
                         ch.changed().await;
                     }
                 }
 
-                let mut child = script.execute();
+                if dry_run {
+                    println!("execute: {}", script.id());
+                } else {
+                    let mut child = script.execute();
 
-                let status = match child.wait().await {
-                    Ok(status) => Some(status),
-                    Err(err) => {
-                        println!("Error running script: {:?}", err);
-                        None
-                    }
-                };
+                    let status = match child.wait().await {
+                        Ok(status) => Some(status),
+                        Err(err) => {
+                            println!("Error running script: {:?}", err);
+                            None
+                        }
+                    };
+                }
 
                 script_watcher.send_replace(ScriptStatus::Finished);
             }));
-            // );
         }
 
         join_all(tasks).await;
 
         println!("finished in: {}", now.elapsed().unwrap().as_secs());
 
-        println!("{:?}", daggy::petgraph::dot::Dot::new(&self.task_graph));
+        if dry_run {
+            println!(
+                "visualized task graph: {}",
+                generate_graphviz_url_from_graph(&self.task_graph)
+            );
+        }
     }
 
     pub fn resolve_workspace_scripts(&mut self) {
@@ -366,7 +389,6 @@ impl Engine {
 
             // check the script's dependnecies for any topological dependencies. Uses the package_graph to determine topological task dependencies.
             for d in s.topological_dependencies().unwrap() {
-                println!("{:?}", d);
                 let package_node_index =
                     find_node_index(&self.package_graph, String::from(package_name)).unwrap();
                 let mut package_parents = self.package_graph.parents(package_node_index);
@@ -400,6 +422,29 @@ fn find_node_index<NodeType: std::cmp::PartialEq>(
     node: NodeType,
 ) -> Option<NodeIndex> {
     return graph.node_identifiers().find(|i| node == graph[*i]);
+}
+
+fn generate_graphviz_url_from_graph<N: std::fmt::Debug, E: std::fmt::Debug>(
+    graph: &Dag<N, E>,
+) -> String {
+    let encoded_graph =
+        encode(&format!("{:?}", daggy::petgraph::dot::Dot::new(graph))).into_owned();
+
+    format!(
+        "https://dreampuf.github.io/GraphvizOnline#{}",
+        encoded_graph
+    )
+}
+
+// Spawns a task to handle reading a child process's stdio and logging it with the log crate
+fn pipe_child_stdio(stdio: impl AsyncRead + Unpin + Send + 'static, prefix: String) {
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stdio).lines();
+
+        while let Some(line) = reader.next_line().await.unwrap() {
+            info!(target: &prefix, "{}", &line);
+        }
+    });
 }
 
 pub fn load_config_file(opts: &options::HastyOptions) -> Config {

@@ -1,13 +1,13 @@
 use clap::Parser;
-use hasty::{self, make_script_id, Engine, Script, TOPOLOGICAL_DEP_PREFIX};
+use hasty::{self, logger, make_script_id, Engine, Script};
 
 #[tokio::main]
 async fn main() {
+    logger::init();
+
     let options = hasty::options::HastyOptions::parse();
 
     if let Some(ref dir) = options.dir {
-        println!("dir: {}", dir.display());
-
         let config = hasty::load_config_file(&options);
 
         let opts_script = match options.script {
@@ -63,6 +63,6 @@ async fn main() {
         // populate graph dependencies
         engine.add_deps_to_graph();
 
-        engine.execute().await;
+        engine.execute(options.dry_run).await;
     }
 }

@@ -154,7 +154,7 @@ impl PartialEq for Script {
 }
 
 pub struct Engine {
-    called_script: String,
+    called_scripts: Vec<String>,
     dir: PathBuf,
     config: Config,
     task_graph: Dag<String, u32, u32>,
@@ -165,15 +165,15 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(config: Config, dir: PathBuf, called_script: &str) -> Self {
+    pub fn new(config: Config, dir: &PathBuf, called_scripts: Vec<String>) -> Self {
         let workspaces = find_workspaces(&dir);
         let mut package_graph = Dag::<String, u32, u32>::new();
 
         package_graph.add_node(String::from("__ROOT__"));
 
         Engine {
-            called_script: String::from(called_script),
-            dir,
+            called_scripts,
+            dir: dir.into(),
             config,
             package_graph,
             task_graph: Dag::<String, u32, u32>::new(),
@@ -252,7 +252,7 @@ impl Engine {
                 // TODO: there's probably a better way to accomplish waiting for deps
                 while deps_remaining > 0 {
                     for ch in deps_channels.iter_mut() {
-                        // If the channel has a value of SciprtStatus::Finished
+                        // If the channel has a value of ScriptStatus::Finished
                         if *ch.borrow() == ScriptStatus::Finished && deps_remaining > 0 {
                             deps_remaining -= 1;
                         }
@@ -306,7 +306,12 @@ impl Engine {
             };
 
             // ignore packages that don't include the main script we are running
-            if ws_scripts.contains_key(&self.called_script) == false {
+            if self
+                .called_scripts
+                .iter()
+                .any(|s| ws_scripts.contains_key(s))
+                == false
+            {
                 continue;
             }
 

@@ -7,7 +7,7 @@ use daggy::{
     Dag, NodeIndex, Walker,
 };
 use futures::future::join_all;
-use log::info;
+use log::{error, info};
 use package_json::{find_workspaces, PackageJSON};
 use serde::Deserialize;
 use std::process::Stdio;
@@ -149,7 +149,7 @@ impl Script {
 
 impl PartialEq for Script {
     fn eq(&self, other: &Self) -> bool {
-        self.config.command == other.config.command
+        self.id() == other.id()
     }
 }
 
@@ -181,10 +181,6 @@ impl Engine {
             deps: Vec::new(),
             workspaces,
         }
-    }
-
-    pub fn add_dep(&mut self, from: &str, to: &str) {
-        self.deps.push((String::from(from), String::from(to)));
     }
 
     pub fn add_deps_to_graph(&mut self) {
@@ -261,14 +257,14 @@ impl Engine {
                 }
 
                 if dry_run {
-                    println!("execute: {}", script.id());
+                    info!("execute: {}", script.id());
                 } else {
                     let mut child = script.execute();
 
                     let status = match child.wait().await {
                         Ok(status) => Some(status),
                         Err(err) => {
-                            println!("Error running script: {:?}", err);
+                            error!("Error running script: {:?}", err);
                             None
                         }
                     };
@@ -280,10 +276,10 @@ impl Engine {
 
         join_all(tasks).await;
 
-        println!("finished in: {}", now.elapsed().unwrap().as_secs());
+        info!("finished in: {}", now.elapsed().unwrap().as_secs());
 
         if dry_run {
-            println!(
+            info!(
                 "visualized task graph: {}",
                 generate_graphviz_url_from_graph(&self.task_graph)
             );
@@ -392,7 +388,7 @@ impl Engine {
                 continue;
             }
 
-            // check the script's dependnecies for any topological dependencies. Uses the package_graph to determine topological task dependencies.
+            // check the script's dependencies for any topological dependencies. Uses the package_graph to determine topological task dependencies.
             for d in s.topological_dependencies().unwrap() {
                 let package_node_index =
                     find_node_index(&self.package_graph, String::from(package_name)).unwrap();
@@ -411,7 +407,7 @@ impl Engine {
 
                     if let Some(parent_scripts) = &parent_package.scripts {
                         if parent_scripts.get(&d) != None {
-                            // The parent script contais the topological dependency, so add a dep to the task graph
+                            // The parent script contains the topological dependency, so add a dep to the task graph
                             self.deps
                                 .push((make_script_id(parent_package_name, &d), s.id()));
                         }

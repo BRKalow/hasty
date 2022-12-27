@@ -11,8 +11,15 @@ impl log::Log for HastyLogger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            // ref: https://doc.rust-lang.org/std/fmt/#fillalignment
-            println!("{} - {}", format!("{:<12}", record.target()), record.args());
+            let prefix = match record.target() {
+                "hasty" => String::from("[hasty] "),
+                _ => {
+                    // ref: https://doc.rust-lang.org/std/fmt/#fillalignment
+                    format!("{:<12} - ", record.target())
+                }
+            };
+
+            println!("{}{}", prefix, record.args());
         }
     }
 

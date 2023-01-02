@@ -13,6 +13,7 @@ async fn main() {
         .unwrap_or(std::env::current_dir().unwrap());
 
     let config = hasty::load_config_file(&options);
+
     let mut tasks_to_execute = vec![];
 
     match options.script {

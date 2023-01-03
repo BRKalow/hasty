@@ -2,6 +2,8 @@
   "pipeline": {
     "build": {
       "command": "build",
+      "files": ["index.js"],
+      "output": ["dist/**"],
       "dependencies": ["format", "^build"]
     },
     "lint": {

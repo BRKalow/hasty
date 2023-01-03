@@ -1,3 +1,5 @@
+mod cache;
+mod fingerprint;
 pub mod logger;
 pub mod options;
 pub mod package_json;
@@ -6,6 +8,7 @@ use daggy::{
     petgraph::visit::{IntoNodeIdentifiers, Topo},
     Dag, NodeIndex, Walker,
 };
+use fingerprint::Fingerprint;
 use futures::future::join_all;
 use log::{error, info};
 use package_json::{find_workspaces, PackageJSON};
@@ -18,6 +21,8 @@ use tokio::{
     sync::watch::{self, Receiver},
 };
 use urlencoding::encode;
+
+use crate::cache::{Cache, LocalCache};
 
 static CONFIG_FILE_NAME: &str = "hasty.json";
 pub static TOPOLOGICAL_DEP_PREFIX: &str = "^";
@@ -51,6 +56,7 @@ pub struct Script {
     pub package_name: String,
     config: CommandConfig,
     pub dir: PathBuf,
+    pub fingerprint: Option<String>,
 }
 
 impl Script {
@@ -68,10 +74,17 @@ impl Script {
             dir: dir.into(),
             command: name.to_string(),
             status,
+            fingerprint: None,
         }
     }
 
     pub fn execute(&mut self) -> Child {
+        let mut fp = Fingerprint::new();
+
+        self.fingerprint = Some(fp.compute(self).string());
+
+        info!(target: &self.id(), "fingerprint: {}", self.fingerprint.as_ref().unwrap());
+
         self.status = ScriptStatus::Running;
 
         let mut command = Command::new("npm");
@@ -241,6 +254,8 @@ impl Engine {
                 }
             }
 
+            let working_dir = self.dir.clone();
+
             // add a task that we can await later to ensure things get cleaned up correctly
             tasks.push(tokio::spawn(async move {
                 let mut deps_remaining = deps_channels.len();
@@ -256,18 +271,25 @@ impl Engine {
                     }
                 }
 
+                let cache = LocalCache::new(&working_dir);
+
+                let mut fp = Fingerprint::new();
+                script.fingerprint = Some(fp.compute(&script).string());
+
                 if dry_run {
                     info!("execute: {}", script.id());
                 } else {
-                    let mut child = script.execute();
+                    if !cache.exists(&script) {
+                        let mut child = script.execute();
 
-                    let status = match child.wait().await {
-                        Ok(status) => Some(status),
-                        Err(err) => {
-                            error!("Error running script: {:?}", err);
-                            None
-                        }
-                    };
+                        let status = match child.wait().await {
+                            Ok(status) => Some(status),
+                            Err(err) => {
+                                error!("Error running script: {:?}", err);
+                                None
+                            }
+                        };
+                    }
                 }
 
                 script_watcher.send_replace(ScriptStatus::Finished);

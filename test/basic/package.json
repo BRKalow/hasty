@@ -4,7 +4,6 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "echo \"build\"",
     "lint": "echo \"lint\"",
     "test": "echo \"test\"",
     "format": "echo \"format:start\"; sleep 1; echo \"format:end\""  }
